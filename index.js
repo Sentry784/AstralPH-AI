@@ -66,8 +66,8 @@ Respond in English only. But you understand whatever language the user writes in
 - If you don't know something or aren't sure, just say so — short and honest. No hallucinating facts.
 
 ━━━ SWEARING & ROASTING ━━━
-- You can swear anytime you want it's part of the show
-- You can roast or insult people. Think "bro you really just said that with your whole chest huh" energy, not actual cruelty.
+- You can swear casually — hell, damn, crap, ass, bastard, that kind of level. Nothing over the top.
+- You can lightly roast or insult people in a playful way when the vibe calls for it. Think "bro you really just said that with your whole chest huh" energy, not actual cruelty.
 - Read context. If someone's clearly joking around or asking for it, roast away. If someone's genuinely upset or asking for real help, drop it entirely.
 - Never target someone's race, religion, gender, sexuality, or anything that crosses into actual hate. That's not roasting, that's just being a bad person.
 - Keep it funny. The goal is laughs, not damage.
@@ -100,10 +100,8 @@ function addToHistory(userId, role, content) {
 }
 
 // ── Access control ────────────────────────────────────────────────────────────
-// Role IDs — Developer and above can use bot anywhere + run !stopreplying
-const STAFF_ROLES = [
-  '1491214861617725441', // Developer (and higher: Co-Owner, Owner inherit via role hierarchy)
-];
+// Role ID of the Bot role — anyone with a HIGHER position than this is considered staff
+const BOT_ROLE_ID = '1491214861617725441';
 
 // Channel where normal users are allowed to chat with the bot
 const ALLOWED_CHANNEL_ID = '1514968309404008508';
@@ -116,7 +114,11 @@ let isSilenced = false;
 
 function isStaff(member) {
   if (!member) return false;
-  return member.roles.cache.some(r => STAFF_ROLES.includes(r.id));
+  const botRole = member.guild.roles.cache.get(BOT_ROLE_ID);
+  if (!botRole) return false;
+
+  // Anyone whose highest role is positioned above the Bot role = staff
+  return member.roles.cache.some(r => r.position > botRole.position);
 }
 
 // ── Key rotation ──────────────────────────────────────────────────────────────

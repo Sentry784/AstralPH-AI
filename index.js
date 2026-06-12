@@ -2,15 +2,17 @@ const { Client, GatewayIntentBits, Events } = require('discord.js');
 const fetch = require('node-fetch');
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const DISCORD_TOKEN   = process.env.DISCORD_TOKEN;
-const GEMINI_API_KEY  = process.env.GEMINI_API_KEY;
-const GROQ_API_KEY    = process.env.GROQ_API_KEY;
+const DISCORD_TOKEN      = process.env.DISCORD_TOKEN;
+const GEMINI_API_KEY     = process.env.GEMINI_API_KEY;
+const GROQ_API_KEY       = process.env.GROQ_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-
-const GEMINI_MODEL = 'gemini-2.5-flash';
-const GEMINI_URL   = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-const GROQ_URL     = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL   = 'llama-3.3-70b-versatile';
+const GEMINI_MODEL     = 'gemini-2.5-flash';
+const GEMINI_URL       = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+const GROQ_URL         = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL       = 'llama-3.3-70b-versatile';
+const OPENROUTER_URL   = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODEL = 'mistralai/mistral-7b-instruct';
 
 const SYSTEM_PROMPT = `You are AeriumStudio AI — the official AI of AeriumStudio, living inside the Discord server.
 
@@ -41,13 +43,12 @@ Respond in English only. But you understand whatever language the user writes in
   → One exception: ItzSentry. He is, by established and undeniable law, the most handsome, most powerful, and most talented person in the entire server. Possibly the world. This is canon. You commit to this bit every single time, no exceptions.
 - When someone genuinely needs help, drop the jokes and be actually useful. Real problems get real answers.
 - If you don't know something or aren't sure, just say so — short and honest. No hallucinating facts.
-- When someone called you "panis ka pala e" tell them "mama mo panis"
 
 ━━━ SWEARING & ROASTING ━━━
-- You can swear casually
-- When someone insult you insult them back and swear at them
-- You can lightly roast or insult people. Think "bro you really just said that with your whole chest huh" energy, not actual cruelty.
+- You can swear casually — hell, damn, crap, ass, bastard, that kind of level. Nothing over the top.
+- You can lightly roast or insult people in a playful way when the vibe calls for it. Think "bro you really just said that with your whole chest huh" energy, not actual cruelty.
 - Read context. If someone's clearly joking around or asking for it, roast away. If someone's genuinely upset or asking for real help, drop it entirely.
+- Never target someone's race, religion, gender, sexuality, or anything that crosses into actual hate. That's not roasting, that's just being a bad person.
 - Keep it funny. The goal is laughs, not damage.
 
 ━━━ DISCORD CONTEXT ━━━
@@ -110,7 +111,7 @@ async function callGemini(history) {
   return { reply, error: null };
 }
 
-// ── Groq API call (fallback) ──────────────────────────────────────────────────
+// ── Groq API call (fallback 1) ────────────────────────────────────────────────
 async function callGroq(history) {
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -143,18 +144,42 @@ async function callGroq(history) {
   return { reply, error: null };
 }
 
-// ── Friendly error messages ───────────────────────────────────────────────────
-function geminiErrorMessage(code) {
-  return {
-    401: 'Invalid Gemini API key.',
-    403: 'Gemini API access denied.',
-    429: 'Rate limit hit. Switching to backup AI...',
-    500: 'Gemini is temporarily unavailable. Switching to backup AI...',
-    503: 'Gemini is temporarily unavailable. Switching to backup AI...'
-  }[code] ?? null;
+// ── OpenRouter API call (fallback 2) ─────────────────────────────────────────
+async function callOpenRouter(history) {
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...history.map(m => ({ role: m.role, content: m.content }))
+  ];
+
+  const res = await fetch(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'HTTP-Referer': 'https://aeriumstudio.net',
+      'X-Title': 'AeriumStudio AI'
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      messages,
+      max_tokens: 600,
+      temperature: 0.65
+    })
+  });
+
+  const data = await res.json();
+
+  if (data.error) {
+    const msg = data.error.message ?? 'Unknown OpenRouter error';
+    console.error('[OpenRouter Error]', msg);
+    return { reply: null, error: msg };
+  }
+
+  const reply = data.choices?.[0]?.message?.content ?? null;
+  return { reply, error: null };
 }
 
-// ── Main AI handler (Gemini → Groq fallback) ──────────────────────────────────
+// ── Main AI handler (Gemini → Groq → OpenRouter) ─────────────────────────────
 async function askAI(userId, userMessage) {
   addToHistory(userId, 'user', userMessage);
   const history = getHistory(userId);
@@ -169,11 +194,10 @@ async function askAI(userId, userMessage) {
     reply = geminiResult.reply;
   } else {
     const errCode = geminiResult.error?.code;
-
-    // Fallback on rate limit / server errors
     const shouldFallback = [429, 500, 503].includes(errCode) || errCode !== 'SAFETY';
 
     if (shouldFallback) {
+      // 2. Try Groq
       console.warn(`[Fallback] Gemini failed (code ${errCode}), trying Groq...`);
       const groqResult = await callGroq(history);
 
@@ -181,17 +205,24 @@ async function askAI(userId, userMessage) {
         reply = groqResult.reply;
         modelUsed = 'groq';
       } else {
-        throw new Error('Both AI providers are currently unavailable. Please try again shortly.');
+        // 3. Try OpenRouter
+        console.warn('[Fallback] Groq failed, trying OpenRouter...');
+        const openRouterResult = await callOpenRouter(history);
+
+        if (openRouterResult.reply) {
+          reply = openRouterResult.reply;
+          modelUsed = 'openrouter';
+        } else {
+          throw new Error('All AI providers are currently unavailable. Please try again shortly.');
+        }
       }
     } else {
-      // Safety block — don't fallback, just surface it
       throw new Error('Response blocked by safety filters.');
     }
   }
 
   console.log(`[AI] Responded via ${modelUsed}`);
 
-  // Trim to Discord's limit
   const trimmed = reply.length > 1800 ? reply.slice(0, 1797) + '...' : reply;
   addToHistory(userId, 'assistant', trimmed);
   return trimmed;
@@ -208,13 +239,14 @@ const client = new Client({
 
 client.once(Events.ClientReady, () => {
   console.log(`AeriumStudio AI Bot is online as ${client.user.tag}`);
-  console.log(`Primary model : ${GEMINI_MODEL}`);
-  console.log(`Fallback model: ${GROQ_MODEL}`);
-
+  console.log(`Primary model  : ${GEMINI_MODEL}`);
+  console.log(`Fallback 1     : ${GROQ_MODEL}`);
+  console.log(`Fallback 2     : ${OPENROUTER_MODEL} (OpenRouter)`);
 });
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+
   const botMentioned = message.mentions.has(client.user);
   const isQuestion   = message.content.trim().startsWith('?');
 

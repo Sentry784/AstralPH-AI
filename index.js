@@ -338,10 +338,16 @@ client.on(Events.MessageCreate, async (message) => {
   if (!botMentioned && !isQuestion) return;
 
   // ── Channel restriction for non-staff ─────────────────────────────────────
-  console.log(`[Channel Check] id=${message.channel.id} parentId=${message.channel.parentId} staff=${staff}`);
+  // Fetch channel if parentId is missing (e.g. freshly created ticket channels)
+  if (!message.channel.parentId) {
+    try { await message.channel.fetch(); } catch (_) {}
+  }
+
+  const parentId = message.channel.parentId ?? null;
+  console.log(`[Channel Check] id=${message.channel.id} parentId=${parentId} staff=${staff}`);
 
   const inAllowedChannel  = message.channel.id === ALLOWED_CHANNEL_ID;
-  const inAllowedCategory = message.channel.parentId === ALLOWED_CATEGORY_ID;
+  const inAllowedCategory = parentId === ALLOWED_CATEGORY_ID;
 
   console.log(`[Channel Check] inAllowedChannel=${inAllowedChannel} inAllowedCategory=${inAllowedCategory}`);
 
